@@ -35,8 +35,7 @@ try:
 except Exception:
     pass  # no secrets configured - the template narrator still works
 
-st.set_page_config(page_title="Multi-Disease Risk Prediction",
-                   page_icon="+", layout="wide")
+st.set_page_config(page_title="MediRisk", page_icon="+", layout="wide")
 
 
 @st.cache_resource
@@ -71,7 +70,8 @@ def contribution_chart(explanation: dict, title: str):
 
 
 # ---------------------------------------------------------------------------
-st.title("Multi-Disease Risk Prediction with Explainable AI")
+st.title("MediRisk")
+st.markdown("**Explainable AI for multi-disease risk prediction and screening**")
 st.caption(
     "Screens for diabetes and heart disease from one set of measurements, and "
     "explains every prediction. The two conditions are clinically linked - in "
