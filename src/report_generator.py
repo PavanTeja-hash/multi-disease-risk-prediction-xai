@@ -56,12 +56,27 @@ def _sentence_case(text: str) -> str:
     return text[:1].upper() + text[1:] if text else text
 
 
-def risk_band(probability: float) -> str:
-    if probability >= 0.70:
+def risk_band(probability: float, threshold: float | None = None) -> str:
+    """
+    Describe the risk level *relative to the screening threshold*.
+
+    Fixed cutoffs cannot do this job. The tuned diabetes threshold is 0.148, so
+    a patient at 20% is flagged for follow-up - and a report calling that same
+    patient "lower risk" in the next sentence contradicts the decision the
+    system just made. Anchoring the bands to the threshold keeps the words and
+    the flag telling the same story.
+
+    Above the threshold, the flagged range is split in half: the lower half is
+    "moderate", the upper half "high".
+    """
+    if threshold is None:
+        threshold = 0.5  # no tuned threshold available; fall back to the default
+
+    if probability < threshold:
+        return "lower"
+    if probability >= threshold + (1.0 - threshold) / 2:
         return "high"
-    if probability >= 0.40:
-        return "moderate"
-    return "lower"
+    return "moderate"
 
 
 def summarise_explanation(explanation: dict, top_n: int = 4) -> dict:
@@ -86,7 +101,8 @@ def summarise_explanation(explanation: dict, top_n: int = 4) -> dict:
     return {
         "disease": config.DISEASE_LABEL[disease],
         "probability": explanation["probability"],
-        "band": risk_band(explanation["probability"]),
+        "band": risk_band(explanation["probability"],
+                          explanation.get("threshold")),
         "raising": describe(explanation["increasing"]),
         "lowering": describe(explanation["decreasing"]),
     }
@@ -353,6 +369,11 @@ def main() -> None:
         model = train_models.load(disease, train_models.GRADIENT_BOOSTING)
         position = explainability.pick_high_risk_patient(model, dataset)
         explanation = explainability.explain_patient(model, dataset, position)
+
+        # Carry the tuned threshold across so this demo bands risk exactly the
+        # way the deployed app does, instead of falling back to a generic 0.5.
+        import deploy
+        explanation["threshold"] = deploy.load(disease)["threshold"]
 
         print("\n" + "-" * 70)
         print(generate_report(explanation, narrator=narrator))

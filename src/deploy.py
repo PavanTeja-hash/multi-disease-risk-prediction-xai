@@ -16,11 +16,12 @@ import numpy as np
 import pandas as pd
 
 import config
+import data_cleaning
 import feature_engineering
 import threshold_tuning
 import train_models
 
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2  # v2 stores raw-column defaults so serving can re-engineer
 
 
 def bundle_path(disease: str):
@@ -38,8 +39,25 @@ def build(disease: str, target_recall: float = 0.80) -> dict:
         dataset.y_val, val_probabilities, target_recall
     )
 
-    # Median of each raw feature, used to fill anything the user leaves blank.
-    defaults = dataset.X_test_raw.median().to_dict()
+    # Two sets of defaults, for two different jobs.
+    #
+    # `defaults` covers every column the model consumes, engineered ones
+    # included, and exists only so older callers keep working.
+    #
+    # `raw_defaults` covers the columns as they appear *before* feature
+    # engineering. This is the one that matters: at serving time the app
+    # supplies raw measurements, so the engineered columns must be recomputed
+    # from them rather than filled in with medians. Filling them with medians
+    # is how training/serving skew happens - the model would receive BMI=45
+    # alongside a bmi_category of "overweight", two facts that contradict each
+    # other, and quietly return a distorted score.
+    raw_columns = [
+        column for column in data_cleaning.load_clean(disease).columns
+        if column != config.TARGET_COLUMN[disease]
+    ]
+    raw_defaults = (
+        data_cleaning.load_clean(disease)[raw_columns].median().to_dict()
+    )
 
     bundle = {
         "version": BUNDLE_VERSION,
@@ -48,9 +66,11 @@ def build(disease: str, target_recall: float = 0.80) -> dict:
         "model": model,
         "scaler": dataset.scaler,
         "feature_names": dataset.feature_names,
+        "raw_feature_names": raw_columns,
         "threshold": float(threshold),
         "target_recall": target_recall,
-        "defaults": defaults,
+        "defaults": dataset.X_test_raw.median().to_dict(),
+        "raw_defaults": raw_defaults,
         "background": dataset.X_train[:200],  # for SHAP, if needed
     }
 
@@ -73,16 +93,45 @@ def load(disease: str) -> dict:
 
 def score(bundle: dict, patient: dict) -> dict:
     """
-    Score one patient given a dict of raw (unscaled) feature values.
+    Score one patient given a dict of raw (unscaled) measurements.
 
-    Missing features fall back to the dataset median, so a partial form still
-    produces a usable estimate.
+    The order here is the whole point:
+
+        1. start from the raw columns, filling anything the caller omitted
+           with the dataset median
+        2. run the SAME feature-engineering function used in training
+        3. select the model's features, in the model's own order
+
+    Step 2 is what prevents training/serving skew. Derived columns like
+    bmi_category, pulse_pressure and risk_factor_count are recomputed from the
+    caller's actual measurements, so they can never disagree with the raw
+    values they are supposed to summarise.
     """
-    row = {
-        name: patient.get(name, bundle["defaults"][name])
-        for name in bundle["feature_names"]
-    }
-    frame = pd.DataFrame([row], columns=bundle["feature_names"])
+    if "raw_defaults" in bundle:
+        raw_row = {
+            name: patient.get(name, bundle["raw_defaults"][name])
+            for name in bundle["raw_feature_names"]
+        }
+        # Any extra keys the caller supplied (already-engineered values, say)
+        # are honoured rather than silently dropped.
+        raw_row.update({k: v for k, v in patient.items() if k in raw_row})
+
+        engineered = feature_engineering.ENGINEERS[bundle["disease"]](
+            pd.DataFrame([raw_row])
+        )
+        # Anything still missing (rare) falls back to the full default set.
+        for name in bundle["feature_names"]:
+            if name not in engineered.columns:
+                engineered[name] = bundle["defaults"][name]
+        frame = engineered[bundle["feature_names"]]
+    else:
+        # Bundle predates version 2 - old behaviour, kept so stale artefacts
+        # do not crash. Regenerate with `python src/deploy.py`.
+        row = {
+            name: patient.get(name, bundle["defaults"][name])
+            for name in bundle["feature_names"]
+        }
+        frame = pd.DataFrame([row], columns=bundle["feature_names"])
 
     scaled = bundle["scaler"].transform(frame)
     probability = float(bundle["model"].predict_proba(scaled)[0, 1])
@@ -121,6 +170,9 @@ def explain(bundle: dict, scored: dict, top_n: int = 6) -> dict:
     return {
         "disease": bundle["disease"],
         "probability": scored["probability"],
+        # The report's wording has to agree with the flag the app shows, so the
+        # decision threshold travels with the explanation.
+        "threshold": bundle["threshold"],
         "actual": None,
         "increasing": [
             {"feature": r.feature, "value": r.value, "shap": float(r.shap)}
