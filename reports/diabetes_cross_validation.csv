@@ -1,0 +1,4 @@
+,roc_auc,roc_auc_std,f1,f1_std,recall,recall_std,precision,precision_std
+Logistic Regression,0.8252,0.003,0.4457,0.0036,0.7646,0.0072,0.3145,0.0025
+Linear SVM,0.8252,0.003,0.4451,0.0036,0.7639,0.0077,0.3141,0.0024
+Gradient Boosting,0.8291,0.0028,0.3017,0.0043,0.2087,0.0033,0.5444,0.0104

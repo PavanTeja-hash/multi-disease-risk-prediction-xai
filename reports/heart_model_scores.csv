@@ -1,0 +1,5 @@
+,Accuracy,Precision,Recall,F1,ROC-AUC
+Logistic Regression,0.7256,0.7559,0.658,0.7036,0.7915
+Linear SVM,0.7259,0.7542,0.6618,0.705,0.7911
+Gradient Boosting,0.7342,0.7604,0.6758,0.7156,0.8029
+Neural Network,0.7323,0.7584,0.6737,0.7135,0.8013

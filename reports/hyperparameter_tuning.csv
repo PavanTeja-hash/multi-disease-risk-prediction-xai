@@ -1,0 +1,5 @@
+disease,model,best_score,worst_score,best_params,seconds
+Diabetes,Gradient Boosting,0.8290849077990997,0.8238971256436542,"{'learning_rate': 0.05, 'max_leaf_nodes': 31}",155
+Diabetes,Logistic Regression,0.8251284774722052,0.8250703354496931,{'C': 0.01},15
+Heart Disease,Gradient Boosting,0.7984464471318402,0.7950537633086876,"{'learning_rate': 0.05, 'max_leaf_nodes': 15}",17
+Heart Disease,Logistic Regression,0.7887370294201005,0.7886341356318495,{'C': 0.1},1
