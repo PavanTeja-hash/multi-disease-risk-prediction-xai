@@ -1,13 +1,18 @@
+# Runtime dependencies for the deployed Streamlit demo (app.py).
+#
+# TensorFlow is deliberately NOT here. The demo serves the Gradient Boosting
+# bundles and never imports the neural network, so it is dead weight at
+# serving time - and Streamlit Cloud currently runs Python 3.14, for which
+# TensorFlow publishes no wheels, which fails the build outright.
+#
+# For the full pipeline (training, EDA, evaluation) use requirements-dev.txt.
+
+streamlit
 pandas
 numpy
 scikit-learn
 imbalanced-learn
-matplotlib
-seaborn
 joblib
-tensorflow
+matplotlib
 shap
-lime
-streamlit
-ucimlrepo
 google-genai

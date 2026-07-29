@@ -1,0 +1,11 @@
+# Full development environment: everything needed to run the whole pipeline
+# end to end with `python main.py`, including training the neural network.
+#
+# The deployed app needs only the smaller set in requirements.txt.
+
+-r requirements.txt
+
+tensorflow      # neural network (Phase 6b) - training only
+seaborn         # EDA figures
+lime            # second-opinion explanations alongside SHAP
+ucimlrepo       # downloads the CDC diabetes dataset
