@@ -1,5 +1,11 @@
 # Multi-Disease Risk Prediction with Explainable AI
 
+### ▶ [Try the live app](https://multi-disease-risk-prediction-xai-tdg7zjqb3huyahcf3eqk2q.streamlit.app/)
+
+Enter a patient's measurements and get both risk scores, the factors that drove
+each one, and a plain-English explanation. *(Free hosting — the app sleeps when
+idle, so the first load can take ~30 seconds.)*
+
 Predicts a patient's risk of **diabetes** and **heart disease** from one set of
 measurements, and explains every prediction in plain English instead of
 returning a bare percentage.
@@ -123,6 +129,8 @@ data/raw/           two public datasets, never modified
   ↓ feature_eng     derive features, split 64/16/20, scale, SMOTE
   ↓ train_models    Logistic Regression · Linear SVM · Gradient Boosting
   ↓ train_nn        feedforward neural network (TensorFlow/Keras)
+  ↓ cross_val       5-fold CV, resampling inside each fold
+  ↓ tuning          grid search over the main hyperparameters
   ↓ evaluate        metrics, ROC curves, confusion matrices
   ↓ threshold       tune the cut-off on validation data
   ↓ explainability  SHAP (global + per-patient) · LIME cross-check
@@ -163,11 +171,34 @@ boosting on heart disease and loses on diabetes. Neural networks frequently do
 not beat gradient boosting on tabular data; knowing when the more complex model
 is not the answer matters more than always reaching for it.
 
-### Two bugs worth knowing about
+### How stable are these numbers?
 
-Both were caught by checking results that looked wrong rather than accepting
-them, and both had the same root cause — SMOTE-resampled data used where
-natural-distribution data was needed.
+5-fold cross-validation, with scaling and SMOTE applied **inside each fold** via
+an imbalanced-learn pipeline — resampling the whole training set first would
+leak the held-out fold's statistics through the scaler.
+
+| | Diabetes ROC-AUC | Heart ROC-AUC |
+|---|---|---|
+| Logistic Regression | 0.8252 ± 0.0030 | 0.7888 ± 0.0073 |
+| Linear SVM | 0.8252 ± 0.0030 | 0.7883 ± 0.0072 |
+| **Gradient Boosting** | **0.8291** ± 0.0028 | **0.7980** ± 0.0075 |
+
+The spread is ±0.003, so these results are not an artefact of one lucky split.
+Gradient Boosting's cross-validated recall (0.2087) also reproduces its
+single-split recall (0.211), confirming the 21%-recall problem was real rather
+than noise.
+
+Grid search over learning rate and tree size moved ROC-AUC by at most **0.005**,
+and by 0.0001 for logistic regression — so the defaults were already
+near-optimal and were kept. Combined with all four model families landing within
+0.01 AUC of each other, that points at the real ceiling: **the features, not the
+model.** Meaningful gains would need clinical measurements like HbA1c, not a
+better algorithm.
+
+### Three bugs worth knowing about
+
+None of these crashed. Each produced a plausible-looking number that happened to
+be wrong, and each was caught by checking a result that didn't smell right.
 
 1. **The neural network validated against a single class.** Keras's
    `validation_split` takes the *last* 15% of the array before shuffling, and
@@ -181,6 +212,19 @@ natural-distribution data was needed.
    R² = 0.005. Switching the background to the natural-distribution validation
    set and selecting the neighbourhood width by local fidelity took R² to
    **0.961**.
+
+3. **Training/serving skew in the deployed app.** The form collected 11 raw
+   measurements, but the model expects 25 features — so the 14 engineered ones
+   (`bmi_category`, `pulse_pressure`, `risk_factor_count`, …) were being filled
+   with dataset medians. The model received `BMI=45` alongside a `bmi_category`
+   of "overweight": two facts contradicting each other. Diabetes risk came out
+   non-monotonic in BMI, and a severely unwell profile scored *lower* than a
+   borderline one. Serving now runs the same feature-engineering function as
+   training, so derived columns can never disagree with the measurements they
+   summarise.
+
+   Every offline metric was valid throughout — training never had the problem.
+   It was visible only by running the deployed app and reading the output.
 
 ### On SHAP values
 
@@ -198,32 +242,46 @@ unsupported medical claim.
 
 ```bash
 python -m venv venv
-venv\Scripts\activate            # Windows;  source venv/bin/activate on Unix
-pip install -r requirements.txt
+venv\Scripts\activate                # Windows;  source venv/bin/activate on Unix
+pip install -r requirements-dev.txt  # full pipeline, including TensorFlow
 
-python scripts/download_data.py  # fetch both datasets (~25 MB)
-python main.py                   # run every phase end to end
-streamlit run app.py             # interactive demo
+python scripts/download_data.py      # fetch both datasets (~25 MB)
+python main.py                       # run every phase end to end
+streamlit run app.py                 # interactive demo
 ```
 
 `python main.py --quick` skips the slow phases. Every phase also runs on its
 own — `python src/eda.py`, `python src/evaluate.py`, and so on.
 
+**Two requirements files.** `requirements.txt` holds only what the deployed app
+needs; `requirements-dev.txt` adds TensorFlow, seaborn, LIME and ucimlrepo for
+the full pipeline. The split exists because the demo serves the Gradient
+Boosting bundles and never imports the neural network, so shipping TensorFlow to
+production is dead weight — and Streamlit Cloud runs Python 3.14, for which
+TensorFlow publishes no wheels at all.
+
 ### Optional: LLM-written reports
 
-Reports are generated from templates by default, with no API key and no network
-access. Setting `ANTHROPIC_API_KEY` switches to Claude-written prose from the
-same SHAP facts:
+Reports come from templates by default — no API key, no network access, works
+for anyone who clones the repo. Setting an API key switches to LLM-written prose
+generated from the same SHAP facts:
 
 ```bash
-pip install anthropic
-set ANTHROPIC_API_KEY=sk-ant-...     # Windows;  export on Unix
+set GEMINI_API_KEY=...        # Windows;  export on Unix. Free tier at aistudio.google.com
 ```
 
-The language model is never given the raw model or asked to assess risk — it
-receives already-computed SHAP facts and rephrases them, under a system prompt
-that forbids inventing factors or giving medical advice. Any failure falls back
-to the template.
+Google Gemini is the default (its free tier needs no billing setup); Anthropic
+is used instead if `ANTHROPIC_API_KEY` is set. The model defaults to
+`gemini-flash-lite-latest` — the non-lite variant runs an internal reasoning
+pass that burned 513 thinking tokens to produce 57 tokens of output, which
+wastes free-tier quota and can return an empty response if the budget is spent
+before any text is written.
+
+The language model never sees the classifier and is never asked to assess risk.
+It receives already-computed SHAP facts and rephrases them, under a system
+prompt that forbids inventing factors, giving medical advice, or describing
+correlations as causes. Any failure — missing key, rate limit, network error —
+falls back to the template.
 
 ---
 
@@ -247,8 +305,31 @@ Both cover broad general populations. After cleaning: 253,096 and 68,713 rows.
   present" without specifying which condition.
 - The diabetes data is **self-reported survey data** — respondents may not know
   they are diabetic, so the true rate is likely higher than 13.9%.
+- **The link between the two diseases is evidence, not a mechanism.** It
+  justifies screening for both from one set of measurements, and heart disease
+  history is a feature in the diabetes model — but the two predictors are
+  independent. Modelling the interaction directly would need a single cohort
+  labelled for both conditions, which no public dataset provides.
 - Both are **screening tools**, not diagnostics. Every output is a
   population-level statistical estimate and needs a clinician in the loop.
+
+### One learned association that should not be read as advice
+
+Heavy alcohol consumption is associated with **lower** diabetes risk in this
+data — 5.9% of heavy drinkers are diabetic versus 14.4% of everyone else — and
+the model reflects that. It is not protective. Three things produce it:
+
+- **Reverse causation.** Diagnosed diabetics are advised to cut down, so the
+  survey captures diabetics who have already stopped. The arrow runs
+  *diabetes → less drinking*, and cross-sectional data cannot tell the
+  difference.
+- **Age confounding.** Heavy drinking falls from 7.8% to 2.8% across the age
+  brackets while diabetes climbs from 1.4% to 18.5%. Age drives both.
+- **Sparse support.** Only **34** training examples resemble a high-risk heavy
+  drinker, and those 34 show half the effect the model extrapolates.
+
+This is exactly the failure mode explainable AI exists to surface, and it is why
+every generated report says "correlated with" rather than "caused by".
 
 ---
 
@@ -258,6 +339,8 @@ Both cover broad general populations. After cleaning: 253,096 and 68,713 rows.
 data/raw/          original datasets (not committed)
 data/processed/    cleaned data
 src/               pipeline, one module per phase
+requirements.txt   runtime deps for the deployed app
+requirements-dev.txt  full pipeline deps (adds TensorFlow, seaborn, LIME)
 models/            trained models and deployable bundles
 reports/figures/   26 generated figures
 reports/           metric tables, screening workload
@@ -266,5 +349,5 @@ main.py            runs everything
 app.py             Streamlit demo
 ```
 
-**Stack:** Python, pandas, NumPy, scikit-learn, TensorFlow/Keras,
+**Stack:** Python, pandas, NumPy, scikit-learn, TensorFlow/Keras, Google Gemini,
 imbalanced-learn, SHAP, LIME, Matplotlib, Seaborn, Streamlit.
