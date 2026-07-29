@@ -2,7 +2,7 @@
 
 **Explainable AI for multi-disease risk prediction and screening**
 
-### ▶ [Try the live app](https://medirisk-xai.streamlit.app/)
+### ▶ [Try the live app](https://medirisk-xai-cdmfepfkmkfft7qrmxngsa.streamlit.app/)
 
 Enter a patient's measurements and get both risk scores, the factors that drove
 each one, and a plain-English explanation. *(Free hosting — the app sleeps when
